@@ -1,0 +1,15 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+
+  
+  <!-- Bomb body (black circle) -->
+  <circle cx="64" cy="80" r="40" fill="#000000"/>
+  
+  <!-- Fuse -->
+  <path d="M 64 40 Q 72 32 80 40 Q 88 48 80 56" stroke="#8B4513" stroke-width="8" fill="none" stroke-linecap="round"/>
+  
+  <!-- Fuse tip (spark) -->
+  <circle cx="80" cy="56" r="4" fill="#FFD700"/>
+  
+  <!-- Bomb highlight (small white circle for 3D effect) -->
+  <circle cx="56" cy="72" r="12" fill="#333333"/>
+</svg> 

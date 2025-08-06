@@ -1,33 +1,29 @@
 import React, { useState, useEffect } from 'react';
+import { getApiBaseUrl, API_ENDPOINTS } from '../constants/socket';
+import { COLORS, FONTS, SPACING, DIMENSIONS } from '../constants/ui';
 
-interface WelcomeModalProps {
+interface TutorialModalProps {
   isOpen: boolean;
   onClose: () => void;
+  mode: 'welcome' | 'help'; // Determines behavior and content
 }
 
-const WelcomeModal: React.FC<WelcomeModalProps> = ({ isOpen, onClose }) => {
+const TutorialModal: React.FC<TutorialModalProps> = ({ isOpen, onClose, mode }) => {
   const [currentStep, setCurrentStep] = useState(0);
-  const [hasSeenWelcome, setHasSeenWelcome] = useState(false);
   const [gridSize, setGridSize] = useState({ width: 0, height: 0 });
 
   useEffect(() => {
-    const seen = localStorage.getItem('massivesweeper-welcome-seen');
-    if (seen === 'true') {
-      setHasSeenWelcome(true);
-    }
-
-    const baseUrl = import.meta.env.DEV 
-          ? "http://localhost:3001" 
-          : "https://massivesweeperback.onrender.com";
-    fetch(`${baseUrl}/grid-size`)
+    fetch(`${getApiBaseUrl()}${API_ENDPOINTS.GRID_SIZE}`)
       .then(res => res.json())
       .then(data => setGridSize(data))
       .catch(err => console.error('Error fetching grid size:', err));
   }, []);
 
   const handleClose = () => {
-    localStorage.setItem('massivesweeper-welcome-seen', 'true');
-    setHasSeenWelcome(true);
+    if (mode === 'welcome') {
+      // For welcome mode, mark as seen in localStorage
+      localStorage.setItem('massivesweeper-welcome-seen', 'true');
+    }
     onClose();
   };
 
@@ -52,17 +48,6 @@ const WelcomeModal: React.FC<WelcomeModalProps> = ({ isOpen, onClose }) => {
         <div>          
           <p>This is a collaborative version of minesweeper where you can play with others in real-time on a {gridSize.width}x{gridSize.height} Minesweeper grid.</p>
           <p>The game does not end when you hit a mine, a counter on the top left corner shows how many mines have exploded by all players combined.</p>
-          {/* <div style={{ 
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', 
-            padding: '20px', 
-            borderRadius: '10px', 
-            margin: '20px 0',
-            color: 'white',
-            textAlign: 'center'
-          }}>
-            <h3>🎯 Your Mission</h3>
-            <p>Clear the entire grid without hitting any mines!</p>
-          </div> */}
         </div>
       )
     },
@@ -74,60 +59,27 @@ const WelcomeModal: React.FC<WelcomeModalProps> = ({ isOpen, onClose }) => {
           <ul style={{ textAlign: 'left', lineHeight: '1.6' }}>
             <li><strong>Left click</strong> on any cell to reveal it</li>
             <li><strong>Right click</strong> on any cell to flag it</li>
+            <li><strong>Chord click</strong> (left + right click) to reveal adjacent cells if correct flags are placed</li>
             <li><strong>Hold space and drag</strong> to pan around the grid</li>
             <li><strong>Mouse wheel</strong> to zoom in and out</li>
             <li><strong>Numbers</strong> show how many mines are adjacent to that cell</li>
             <li><strong>Avoid mines</strong> - that is the minesweeper part</li>            
           </ul>
-          
-          {/* <div style={{ 
-            background: '#f8f9fa', 
-            padding: '15px', 
-            borderRadius: '8px', 
-            margin: '15px 0',
-            border: '2px solid #e9ecef'
-          }}>
-            <h4>💡 Pro Tips:</h4>
-            <ul style={{ textAlign: 'left', margin: '10px 0' }}>
-              <li>Start with corners and edges - they have fewer adjacent cells</li>
-              <li>If a cell shows "1", there's exactly one mine next to it</li>
-              <li>Work together with other players to clear the grid faster!</li>
-            </ul>
-          </div> */}
         </div>
       )
-    },    
+    },
     // {
-    //   title: "Multiplayer Features 🌐",
+    //   title: "Advanced Features 🚀",
     //   content: (
     //     <div>
-    //       <h3>Play with others in real-time!</h3>
-    //       <div style={{ 
-    //         background: 'linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%)', 
-    //         padding: '20px', 
-    //         borderRadius: '10px', 
-    //         margin: '20px 0',
-    //         color: 'white'
-    //       }}>
-    //         <h4>🎮 Multiplayer Features:</h4>
-    //         <ul style={{ textAlign: 'left', lineHeight: '1.6' }}>
-    //           <li><strong>Real-time collaboration</strong> - see other players' moves instantly</li>
-    //           <li><strong>Shared progress</strong> - work together to clear the massive grid</li>
-    //           <li><strong>Live updates</strong> - watch as the grid gets revealed by the community</li>
-    //           <li><strong>No waiting</strong> - jump in and start playing immediately</li>
-    //         </ul>
-    //       </div>
-          
-    //       <div style={{ 
-    //         background: '#f3e5f5', 
-    //         padding: '15px', 
-    //         borderRadius: '8px', 
-    //         margin: '15px 0',
-    //         border: '2px solid #9c27b0'
-    //       }}>
-    //         <h4>🚀 Ready to start?</h4>
-    //         <p>Click "Get Started" to join the massive Minesweeper adventure!</p>
-    //       </div>
+    //       <h3>Pro Tips & Features:</h3>
+    //       <ul style={{ textAlign: 'left', lineHeight: '1.6' }}>
+    //         <li><strong>Chord Click</strong>: When a revealed cell shows a number, if you've placed the correct number of flags around it, chord click to reveal all remaining adjacent cells</li>
+    //         <li><strong>Preemptive Loading</strong>: The game loads adjacent chunks automatically for smooth scrolling</li>
+    //         <li><strong>Real-time Collaboration</strong>: Play with others simultaneously on the same massive grid</li>
+    //         <li><strong>Dynamic Zoom</strong>: Zoom levels from 0.35x to 4x for different viewing preferences</li>
+    //         <li><strong>Grid Rulers</strong>: Use the ruler lines to navigate the massive grid</li>
+    //       </ul>
     //     </div>
     //   )
     // }
@@ -289,11 +241,14 @@ const WelcomeModal: React.FC<WelcomeModalProps> = ({ isOpen, onClose }) => {
               e.currentTarget.style.boxShadow = 'none';
             }}
           >
-            {currentStep === tutorialSteps.length - 1 ? 'Get Started!' : 'Next'}
+            {currentStep === tutorialSteps.length - 1 
+              ? (mode === 'welcome' ? 'Get Started!' : 'Got it!') 
+              : 'Next'
+            }
           </button>
         </div>
 
-        {/* Skip tutorial option */}
+        {/* Close option */}
         <div style={{ 
           textAlign: 'center', 
           marginTop: '20px'
@@ -309,7 +264,7 @@ const WelcomeModal: React.FC<WelcomeModalProps> = ({ isOpen, onClose }) => {
               fontSize: '14px'
             }}
           >
-            Skip tutorial
+            {mode === 'welcome' ? 'Skip tutorial' : 'Close help'}
           </button>
         </div>
       </div>
@@ -317,4 +272,4 @@ const WelcomeModal: React.FC<WelcomeModalProps> = ({ isOpen, onClose }) => {
   );
 };
 
-export default WelcomeModal;
+export default TutorialModal; 

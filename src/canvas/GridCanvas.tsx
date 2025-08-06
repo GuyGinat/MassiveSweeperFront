@@ -2,6 +2,41 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 import { useChunkedGridStore, Cell, Chunk } from "../hooks/useChunkedGridStore";
 import { usePlayerStats } from "../hooks/usePlayerStats";
 import { userTokenInfo } from "../network/socket";
+import { 
+  CHUNK_SIZE, 
+  CELL_SIZE, 
+  ZOOM_LIMITS, 
+  DEFAULT_ZOOM, 
+  ZOOM_INTENSITY, 
+  MIN_VISIBLE_CHUNKS,
+  RULER_INTERVAL,
+  STATS_POLL_INTERVAL,
+  CHUNK_REFRESH_DELAY,
+  COMPLETION_RESET_THRESHOLD,
+  DEFAULT_GRID_CENTER,
+  getCellRenderStep,
+  getBufferZoneSize,
+  expandChunkBounds,
+  clampZoom,
+  worldToChunk,
+  worldToLocal,
+  isWithinGridBounds
+} from "../constants/game";
+import { 
+  COLORS, 
+  Z_INDEX, 
+  FONTS, 
+  SPACING, 
+  DIMENSIONS,
+  CURSORS,
+  getNumberColor,
+  getResponsiveFontSize
+} from "../constants/ui";
+import { 
+  getApiBaseUrl, 
+  API_ENDPOINTS, 
+  ERROR_MESSAGES 
+} from "../constants/socket";
 
 export function GridCanvas() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -9,6 +44,7 @@ export function GridCanvas() {
   const requestChunk = useChunkedGridStore((state) => state.requestChunk);
   const revealCell = useChunkedGridStore((state) => state.revealCell);
   const flagCell = useChunkedGridStore((state) => state.flagCell);
+  const chordClick = useChunkedGridStore((state) => state.chordClick);
   const fetchGridSize = useChunkedGridStore((state) => state.fetchGridSize);
   const gridSize = useChunkedGridStore((state) => state.gridSize);
   
@@ -19,7 +55,7 @@ export function GridCanvas() {
   const [offset, setOffset] = useState({ x: 0, y: 0 }); // Start at top-left
   const [isPanning, setIsPanning] = useState(false);
   const [lastMouse, setLastMouse] = useState<{ x: number; y: number } | null>(null);
-  const [zoom, setZoom] = useState(1); // Start at normal zoom
+  const [zoom, setZoom] = useState(DEFAULT_ZOOM); // Start at normal zoom
   const [isSpaceDown, setIsSpaceDown] = useState(false);
   const [canvasSize, setCanvasSize] = useState({ width: window.innerWidth, height: window.innerHeight });
 
@@ -38,11 +74,31 @@ export function GridCanvas() {
 
   // Hovered cell state
   const [hoverCell, setHoverCell] = useState<{ x: number; y: number } | null>(null);
+  
+  // Chord click state (simultaneous left and right mouse buttons)
+  const [pressedButtons, setPressedButtons] = useState<Set<number>>(new Set());
+  
+  // Visual feedback state for mouse down
+  const [pressedCell, setPressedCell] = useState<{ x: number; y: number } | null>(null);
+  
   // Rules panel state
   const [showRules, setShowRules] = useState(false);
   // Completion screen state
   const [showCompletion, setShowCompletion] = useState(false);
   const [completionMinimized, setCompletionMinimized] = useState(false);
+
+  // Determine the appropriate cursor based on current state
+  const getCursor = useCallback(() => {
+    if (isSpaceDown) {
+      if (isPanning) {
+        return CURSORS.GRABBING; // Hand grip cursor when panning
+      } else {
+        return CURSORS.GRAB; // Hand cursor when space is pressed but not panning
+      }
+    } else {
+      return CURSORS.DEFAULT; // Default cursor when not pressing space
+    }
+  }, [isSpaceDown, isPanning]);
 
   // Fetch grid size on mount
   useEffect(() => {
@@ -62,7 +118,7 @@ export function GridCanvas() {
 
   // Reset minimized state when game resets (revealed count drops significantly)
   useEffect(() => {
-    if (backendStats.revealed < 1000 && completionMinimized) {
+    if (backendStats.revealed < COMPLETION_RESET_THRESHOLD && completionMinimized) {
       setCompletionMinimized(false);
     }
   }, [backendStats.revealed, completionMinimized]);
@@ -80,8 +136,7 @@ export function GridCanvas() {
     if (!import.meta.env.DEV) return;
     
     try {
-      const baseUrl = "http://localhost:3001";
-      const response = await fetch(`${baseUrl}/reveal-all`)
+      const response = await fetch(`${getApiBaseUrl()}${API_ENDPOINTS.REVEAL_ALL}`)
       
       if (response.ok) {
         console.log("All cells revealed for debugging");
@@ -98,15 +153,11 @@ export function GridCanvas() {
     let mounted = true;
     async function fetchStats() {
       try {
-        const baseUrl = import.meta.env.DEV 
-          ? "http://localhost:3001" 
-          : "https://massivesweeperback.onrender.com";
-        
         const [chunkRes, revealedRes, flaggedRes, usersRes] = await Promise.all([
-          fetch(`${baseUrl}/chunk-count`).then(r => r.json()),
-          fetch(`${baseUrl}/revealed-stats`).then(r => r.json()),
-          fetch(`${baseUrl}/flagged-stats`).then(r => r.json()),
-          fetch(`${baseUrl}/active-users`).then(r => r.json()),
+          fetch(`${getApiBaseUrl()}${API_ENDPOINTS.CHUNK_COUNT}`).then(r => r.json()),
+          fetch(`${getApiBaseUrl()}${API_ENDPOINTS.REVEALED_STATS}`).then(r => r.json()),
+          fetch(`${getApiBaseUrl()}${API_ENDPOINTS.FLAGGED_STATS}`).then(r => r.json()),
+          fetch(`${getApiBaseUrl()}${API_ENDPOINTS.ACTIVE_USERS}`).then(r => r.json()),
         ]);
         if (mounted) {
           const newStats = {
@@ -131,12 +182,12 @@ export function GridCanvas() {
              }
            }
         }
-      } catch (e) {
-        console.error("Failed to fetch stats:", e);
+              } catch (e) {
+          console.error("Failed to fetch stats:", e);
+        }
       }
-    }
          fetchStats();
-     const interval = setInterval(fetchStats, 2000);
+     const interval = setInterval(fetchStats, STATS_POLL_INTERVAL);
      return () => { mounted = false; clearInterval(interval); };
    }, [gridSize, completionMinimized]);
 
@@ -145,11 +196,11 @@ export function GridCanvas() {
     if (!gridSize) return { left: 0, top: 0, right: 0, bottom: 0 };
     
     // Top-left in grid coords
-    const left = Math.max(0, Math.floor((-offset.x) / (10 * zoom)));
-    const top = Math.max(0, Math.floor((-offset.y) / (10 * zoom)));
+    const left = Math.max(0, Math.floor((-offset.x) / (CELL_SIZE * zoom)));
+    const top = Math.max(0, Math.floor((-offset.y) / (CELL_SIZE * zoom)));
     // Bottom-right in grid coords
-    const right = Math.min(gridSize.width, Math.ceil((canvasSize.width - offset.x) / (10 * zoom)));
-    const bottom = Math.min(gridSize.height, Math.ceil((canvasSize.height - offset.y) / (10 * zoom)));
+    const right = Math.min(gridSize.width, Math.ceil((canvasSize.width - offset.x) / (CELL_SIZE * zoom)));
+    const bottom = Math.min(gridSize.height, Math.ceil((canvasSize.height - offset.y) / (CELL_SIZE * zoom)));
     return { left, top, right, bottom };
   }
 
@@ -157,14 +208,32 @@ export function GridCanvas() {
     if (!gridSize) return [];
     
     const { left, top, right, bottom } = getVisibleBounds();
-    const chunkSize = 100; // Should match the chunk size from the store
-    const chunkLeft = Math.floor(left / chunkSize);
-    const chunkTop = Math.floor(top / chunkSize);
-    const chunkRight = Math.floor((right - 1) / chunkSize);
-    const chunkBottom = Math.floor((bottom - 1) / chunkSize);
+    const chunkLeft = Math.floor(left / CHUNK_SIZE);
+    const chunkTop = Math.floor(top / CHUNK_SIZE);
+    const chunkRight = Math.floor((right - 1) / CHUNK_SIZE);
+    const chunkBottom = Math.floor((bottom - 1) / CHUNK_SIZE);
+    
+    // Calculate buffer zone size based on zoom level
+    const bufferSize = getBufferZoneSize(zoom);
+    
+    // Expand bounds with buffer zone for preemptive loading
+    const expandedBounds = expandChunkBounds(
+      { left: chunkLeft, top: chunkTop, right: chunkRight, bottom: chunkBottom },
+      bufferSize
+    );
+    
+    // Clamp to grid bounds
+    const maxChunkX = Math.floor(gridSize.width / CHUNK_SIZE) - 1;
+    const maxChunkY = Math.floor(gridSize.height / CHUNK_SIZE) - 1;
+    
+    const finalLeft = Math.max(0, Math.min(expandedBounds.left, maxChunkX));
+    const finalTop = Math.max(0, Math.min(expandedBounds.top, maxChunkY));
+    const finalRight = Math.max(0, Math.min(expandedBounds.right, maxChunkX));
+    const finalBottom = Math.max(0, Math.min(expandedBounds.bottom, maxChunkY));
+    
     const chunks: Array<{ cx: number; cy: number }> = [];
-    for (let cy = chunkTop; cy <= chunkBottom; cy++) {
-      for (let cx = chunkLeft; cx <= chunkRight; cx++) {
+    for (let cy = finalTop; cy <= finalBottom; cy++) {
+      for (let cx = finalLeft; cx <= finalRight; cx++) {
         chunks.push({ cx, cy });
       }
     }
@@ -176,7 +245,22 @@ export function GridCanvas() {
       console.log("Grid size not loaded yet, skipping chunk requests");
       return;
     }
+    
+    const { left, top, right, bottom } = getVisibleBounds();
+    const chunkLeft = Math.floor(left / CHUNK_SIZE);
+    const chunkTop = Math.floor(top / CHUNK_SIZE);
+    const chunkRight = Math.floor((right - 1) / CHUNK_SIZE);
+    const chunkBottom = Math.floor((bottom - 1) / CHUNK_SIZE);
+    
+    const bufferSize = getBufferZoneSize(zoom);
     const visibleChunks = getVisibleChunks();
+    
+    // Log buffer zone information
+    if (bufferSize > 0) {
+      console.log(`[Buffer Loading] Zoom: ${zoom.toFixed(2)}, Buffer: ${bufferSize} chunks`);
+      console.log(`[Buffer Loading] Visible: ${chunkRight - chunkLeft + 1}x${chunkBottom - chunkTop + 1}, Total: ${visibleChunks.length} chunks`);
+    }
+    
     for (const { cx, cy } of visibleChunks) {
       requestChunk(cx, cy);
     }
@@ -207,7 +291,7 @@ export function GridCanvas() {
     // Wait a tick for backend to process, then re-request visible chunks
     setTimeout(() => {
       requestVisibleChunks();
-    }, 50);
+    }, CHUNK_REFRESH_DELAY);
   }, [revealCell, requestVisibleChunks, loadedChunks, incrementCellsCleared, incrementBombsExploded]);
 
   // Handle window resize
@@ -233,51 +317,91 @@ export function GridCanvas() {
     if (!canvas) return;
 
     const handleMouseDown = (e: MouseEvent) => {
+      // Track pressed buttons for chord click detection
+      setPressedButtons(prev => new Set([...prev, e.button]));
+      
       if (isSpaceDown) {
         setIsPanning(true);
         setLastMouse({ x: e.clientX, y: e.clientY });
       } else {
-        // Grid interaction
+        // Grid interaction - only set visual feedback, no actions yet
         const rect = canvas.getBoundingClientRect();
         const cx = (e.clientX - rect.left - offset.x) / zoom;
         const cy = (e.clientY - rect.top - offset.y) / zoom;
-        const cellX = Math.floor(cx / 10);
-        const cellY = Math.floor(cy / 10);
-        const chunkSize = 100; // Should match the chunk size from the store
-        const chunkX = Math.floor(cellX / chunkSize);
-        const chunkY = Math.floor(cellY / chunkSize);
-        const localX = ((cellX % chunkSize) + chunkSize) % chunkSize;
-        const localY = ((cellY % chunkSize) + chunkSize) % chunkSize;
+        const cellX = Math.floor(cx / CELL_SIZE);
+        const cellY = Math.floor(cy / CELL_SIZE);
+        
         if (cellX >= 0 && cellY >= 0) {
-          if (e.button === 0) {
-            revealAndRefresh(chunkX, chunkY, localX, localY);
-          } else if (e.button === 2) {
-            flagCell(chunkX, chunkY, localX, localY);
-            
-            // Track flag placement
-            const chunk = loadedChunks[`${chunkX},${chunkY}`];
-            if (chunk && chunk[localY] && chunk[localY][localX]) {
-              const cell = chunk[localY][localX];
-              if (!cell.flagged) {
-                incrementFlagsPlaced(cell.hasMine);
+          // Set visual feedback for the pressed cell
+          setPressedCell({ x: cellX, y: cellY });
+        }
+      }
+    };
+    const handleMouseUp = (e: MouseEvent) => {
+      // Clear the released button from pressed buttons
+      setPressedButtons(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(e.button);
+        return newSet;
+      });
+      
+      // Clear visual feedback
+      setPressedCell(null);
+      
+      if (isPanning) {
+        setIsPanning(false);
+        setLastMouse(null);
+        return;
+      }
+      
+      // Perform grid actions on mouse up
+      if (pressedCell) {
+        const rect = canvas.getBoundingClientRect();
+        const cx = (e.clientX - rect.left - offset.x) / zoom;
+        const cy = (e.clientY - rect.top - offset.y) / zoom;
+        const cellX = Math.floor(cx / CELL_SIZE);
+        const cellY = Math.floor(cy / CELL_SIZE);
+        
+        // Only perform action if mouse is still over the same cell
+        if (cellX === pressedCell.x && cellY === pressedCell.y) {
+          const chunkX = worldToChunk(cellX);
+          const chunkY = worldToChunk(cellY);
+          const localX = worldToLocal(cellX);
+          const localY = worldToLocal(cellY);
+          
+          // Check for chord click (simultaneous left and right mouse buttons)
+          const currentPressedButtons = new Set([...pressedButtons, e.button]);
+          if (currentPressedButtons.has(0) && currentPressedButtons.has(2)) {
+            // Chord click detected - both left and right buttons are pressed
+            chordClick(chunkX, chunkY, localX, localY);
+          } else {
+            // Single button click
+            if (e.button === 0) {
+              revealAndRefresh(chunkX, chunkY, localX, localY);
+            } else if (e.button === 2) {
+              flagCell(chunkX, chunkY, localX, localY);
+              
+              // Track flag placement
+              const chunk = loadedChunks[`${chunkX},${chunkY}`];
+              if (chunk && chunk[localY] && chunk[localY][localX]) {
+                const cell = chunk[localY][localX];
+                if (!cell.flagged) {
+                  incrementFlagsPlaced(cell.hasMine);
+                }
               }
             }
           }
         }
       }
     };
-    const handleMouseUp = () => {
-      setIsPanning(false);
-      setLastMouse(null);
-    };
     const handleMouseMove = (e: MouseEvent) => {
       if (!isPanning || !lastMouse) {
         const rect = canvas.getBoundingClientRect();
         const cx = (e.clientX - rect.left - offset.x) / zoom;
         const cy = (e.clientY - rect.top - offset.y) / zoom;
-        const cellX = Math.floor(cx / 10);
-        const cellY = Math.floor(cy / 10);
-        if (cellX >= 0 && cellY >= 0 && gridSize && cellX < gridSize.width && cellY < gridSize.height) {
+        const cellX = Math.floor(cx / CELL_SIZE);
+        const cellY = Math.floor(cy / CELL_SIZE);
+        if (gridSize && isWithinGridBounds(cellX, cellY, gridSize.width, gridSize.height)) {
           setHoverCell({ x: cellX, y: cellY });
         } else {
           setHoverCell(null);
@@ -297,14 +421,12 @@ export function GridCanvas() {
       // World coordinates before zoom
       const worldX = (mouseX - offset.x) / zoom;
       const worldY = (mouseY - offset.y) / zoom;
-      const zoomIntensity = 0.1;
       // Calculate minZoom so that at most 4x4 chunks (400x400 cells) are visible
-      const chunkSize = 100; // Should match the chunk size from the store
-      const minZoomX = canvasSize.width / (chunkSize * 4 * 10);
-      const minZoomY = canvasSize.height / (chunkSize * 4 * 10);
-      const minZoom = Math.max(minZoomX, minZoomY, 0.05);
-      let newZoom = zoom - e.deltaY * zoomIntensity * 0.01;
-      newZoom = Math.max(minZoom, Math.min(4, newZoom)); // Clamp zoom
+      const minZoomX = canvasSize.width / (CHUNK_SIZE * MIN_VISIBLE_CHUNKS * CELL_SIZE);
+      const minZoomY = canvasSize.height / (CHUNK_SIZE * MIN_VISIBLE_CHUNKS * CELL_SIZE);
+      const minZoom = Math.max(minZoomX, minZoomY, ZOOM_LIMITS.MIN);
+      let newZoom = zoom - e.deltaY * ZOOM_INTENSITY * 0.01;
+      newZoom = clampZoom(newZoom); // Clamp zoom
       // Adjust offset so the world point under the mouse stays under the mouse
       const newOffsetX = mouseX - worldX * newZoom;
       const newOffsetY = mouseY - worldY * newZoom;
@@ -326,7 +448,7 @@ export function GridCanvas() {
       canvas.removeEventListener("wheel", handleWheel);
       canvas.removeEventListener("contextmenu", handleContextMenu);
     };
-  }, [isPanning, lastMouse, zoom, isSpaceDown, offset, canvasSize]);
+  }, [isPanning, lastMouse, zoom, isSpaceDown, offset, canvasSize, pressedButtons, chordClick, pressedCell]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -334,16 +456,13 @@ export function GridCanvas() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = "#e0e0e0"; // light gray background
+    ctx.fillStyle = COLORS.BACKGROUND.PRIMARY; // light gray background
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.setTransform(zoom, 0, 0, zoom, offset.x, offset.y);
     // Only render visible cells in loaded chunks
     const { left, top, right, bottom } = getVisibleBounds();
     // Dynamic cell skipping for performance
-    let cellStep = 1;
-    if (zoom < 0.2) cellStep = 8;
-    else if (zoom < 0.4) cellStep = 4;
-    else if (zoom < 0.7) cellStep = 2;
+    const cellStep = getCellRenderStep(zoom);
     for (let y = top; y < bottom; y += cellStep) {
       for (let x = left; x < right; x += cellStep) {
         const chunkSize = 100; // Should match the chunk size from the store
@@ -354,57 +473,55 @@ export function GridCanvas() {
         const chunk = loadedChunks[`${chunkX},${chunkY}`];
         if (!chunk || !chunk[localY] || !chunk[localY][localX]) continue;
         const cell = chunk[localY][localX];
+        
+        // Check if this cell is being pressed for visual feedback
+        const isPressed = pressedCell && pressedCell.x === x && pressedCell.y === y;
+        
         // Cell background
         if (cell.revealed) {
-          ctx.fillStyle = cell.hasMine ? "#f88" : "#ccc";
+          ctx.fillStyle = cell.hasMine ? COLORS.CELL.MINE : COLORS.CELL.REVEALED;
         } else {
-          ctx.fillStyle = "#222";
+          ctx.fillStyle = COLORS.CELL.UNREVEALED;
         }
-        ctx.fillRect(x * 10, y * 10, 9 * cellStep, 9 * cellStep);
+        
+        // Add pressed visual feedback (brighter color)
+        if (isPressed) {
+          ctx.fillStyle = COLORS.CELL.PRESSED; // Use brighter version of unrevealed color
+        }
+        ctx.fillRect(x * CELL_SIZE, y * CELL_SIZE, (CELL_SIZE - 1) * cellStep, (CELL_SIZE - 1) * cellStep);
         // Border
-        ctx.strokeStyle = "black";
+        ctx.strokeStyle = COLORS.CELL.BORDER;
         ctx.lineWidth = 1;
-        ctx.strokeRect(x * 10, y * 10, 9 * cellStep, 9 * cellStep);
+        ctx.strokeRect(x * CELL_SIZE, y * CELL_SIZE, (CELL_SIZE - 1) * cellStep, (CELL_SIZE - 1) * cellStep);
         // Only draw details if not skipping many cells
         if (cellStep === 1) {
           // Flag
           if (cell.flagged && !cell.revealed) {
-            ctx.fillStyle = "red";
+            ctx.fillStyle = COLORS.GAME.FLAG;
             ctx.beginPath();
-            ctx.moveTo(x * 10 + 2, y * 10 + 7);
-            ctx.lineTo(x * 10 + 7, y * 10 + 4);
-            ctx.lineTo(x * 10 + 2, y * 10 + 2);
+            ctx.moveTo(x * CELL_SIZE + 2, y * CELL_SIZE + 7);
+            ctx.lineTo(x * CELL_SIZE + 7, y * CELL_SIZE + 4);
+            ctx.lineTo(x * CELL_SIZE + 2, y * CELL_SIZE + 2);
             ctx.closePath();
             ctx.fill();
           }
           // Mine
           if (cell.revealed && cell.hasMine) {
-            ctx.fillStyle = "black";
+            ctx.fillStyle = COLORS.GAME.MINE;
             ctx.beginPath();
-            ctx.arc(x * 10 + 4.5, y * 10 + 4.5, 3, 0, 2 * Math.PI);
+            ctx.arc(x * CELL_SIZE + 4.5, y * CELL_SIZE + 4.5, 3, 0, 2 * Math.PI);
             ctx.fill();
           }
           // Adjacent mines
           if (cell.revealed && !cell.hasMine && cell.adjacentMines > 0) {
-            const numberColors = [
-              '', // 0 (unused)
-              '#0000FF', // 1 - blue
-              '#008200', // 2 - green
-              '#FF0000', // 3 - red
-              '#000080', // 4 - navy
-              '#800000', // 5 - maroon
-              '#008080', // 6 - teal
-              '#000000', // 7 - black
-              '#808080', // 8 - gray
-            ];
-            ctx.fillStyle = numberColors[cell.adjacentMines] || 'blue';
-            ctx.font = "7px sans-serif";
+            ctx.fillStyle = getNumberColor(cell.adjacentMines);
+            ctx.font = `${FONTS.SIZE.TINY} ${FONTS.FAMILY.PRIMARY}`;
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
             ctx.fillText(
               String(cell.adjacentMines),
-              x * 10 + 4.5,
-              y * 10 + 5
+              x * CELL_SIZE + 4.5,
+              y * CELL_SIZE + 5
             );
           }
         }
@@ -414,24 +531,24 @@ export function GridCanvas() {
     if (gridSize) {
       ctx.save();
       ctx.setTransform(zoom, 0, 0, zoom, offset.x, offset.y);
-      ctx.strokeStyle = "rgba(0, 100, 255, 0.6)"; // Blue with transparency
+      ctx.strokeStyle = COLORS.GRID.RULER_LINE; // Blue with transparency
       ctx.lineWidth = 2;
       
       // Vertical lines (every 100 cells)
-      for (let x = 100; x < gridSize.width; x += 100) {
-        const worldX = x * 10;
+      for (let x = RULER_INTERVAL; x < gridSize.width; x += RULER_INTERVAL) {
+        const worldX = x * CELL_SIZE;
         ctx.beginPath();
         ctx.moveTo(worldX, 0);
-        ctx.lineTo(worldX, gridSize.height * 10);
+        ctx.lineTo(worldX, gridSize.height * CELL_SIZE);
         ctx.stroke();
       }
       
       // Horizontal lines (every 100 cells)
-      for (let y = 100; y < gridSize.height; y += 100) {
-        const worldY = y * 10;
+      for (let y = RULER_INTERVAL; y < gridSize.height; y += RULER_INTERVAL) {
+        const worldY = y * CELL_SIZE;
         ctx.beginPath();
         ctx.moveTo(0, worldY);
-        ctx.lineTo(gridSize.width * 10, worldY);
+        ctx.lineTo(gridSize.width * CELL_SIZE, worldY);
         ctx.stroke();
       }
       
@@ -443,17 +560,16 @@ export function GridCanvas() {
        ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset to screen coordinates
        
        // Calculate font size based on zoom (inverse relationship)
-       const baseFontSize = 16;
-       const fontSize = Math.max(12, Math.min(24, baseFontSize / zoom));
+       const fontSize = getResponsiveFontSize(16, zoom);
        
-       ctx.fillStyle = "rgba(0, 100, 255, 0.9)";
-       ctx.font = `${fontSize}px monospace`;
+       ctx.fillStyle = COLORS.GRID.RULER_LABEL;
+       ctx.font = `${fontSize}px ${FONTS.FAMILY.MONOSPACE}`;
        ctx.textAlign = "center";
        ctx.textBaseline = "middle";
        
        // Vertical labels (top edge of screen)
-       for (let x = 100; x < gridSize.width; x += 100) {
-         const worldX = x * 10;
+       for (let x = RULER_INTERVAL; x < gridSize.width; x += RULER_INTERVAL) {
+         const worldX = x * CELL_SIZE;
          const screenX = worldX * zoom + offset.x;
          
          // Only draw if the line is visible on screen
@@ -463,8 +579,8 @@ export function GridCanvas() {
        }
        
        // Horizontal labels (left edge of screen)
-       for (let y = 100; y < gridSize.height; y += 100) {
-         const worldY = y * 10;
+       for (let y = RULER_INTERVAL; y < gridSize.height; y += RULER_INTERVAL) {
+         const worldY = y * CELL_SIZE;
          const screenY = worldY * zoom + offset.y;
          
          // Only draw if the line is visible on screen
@@ -477,11 +593,11 @@ export function GridCanvas() {
     }
     
     // Draw MASSIVESWEEPER in the center of the grid (world coordinates)
-    const gridCenterX = gridSize ? (gridSize.width * 10) / 2 : 2000;
-    const gridCenterY = gridSize ? (gridSize.height * 10) / 2 : 1500;
+    const gridCenterX = gridSize ? (gridSize.width * CELL_SIZE) / 2 : DEFAULT_GRID_CENTER.X;
+    const gridCenterY = gridSize ? (gridSize.height * CELL_SIZE) / 2 : DEFAULT_GRID_CENTER.Y;
     ctx.save();
     ctx.setTransform(zoom, 0, 0, zoom, offset.x, offset.y);
-    ctx.font = "bold 48px sans-serif";    
+    ctx.font = `bold 48px ${FONTS.FAMILY.PRIMARY}`;    
     ctx.fillStyle = "rgba(0,0,0,0.15)";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
@@ -490,28 +606,29 @@ export function GridCanvas() {
     // Draw counters in top left
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     // Draw background for UI
-    ctx.fillStyle = "rgba(240,240,240,0.85)";
-    ctx.fillRect(5, 5, 260, 200);
-    ctx.fillStyle = "#222";
-    ctx.font = "16px monospace";
+    ctx.fillStyle = COLORS.BACKGROUND.OVERLAY;
+    ctx.fillRect(SPACING.SMALL, SPACING.SMALL, DIMENSIONS.OVERLAY.WIDTH, DIMENSIONS.OVERLAY.HEIGHT);
+    ctx.fillStyle = COLORS.UI.TEXT.PRIMARY;
+    ctx.font = `16px ${FONTS.FAMILY.MONOSPACE}`;
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
-    ctx.fillText(`MassiveSweeper`, 10, 10);
-    ctx.fillText(`🧹 Active sweepers: ${backendStats.activeUsers}`, 10, 30);
-    ctx.fillText(`🗺️ Revealed: ${backendStats.revealed} (${backendStats.revealedPercent.toFixed(2)}%)`, 10, 50);
-    ctx.fillText(`🚩 Flags planted: ${backendStats.flagged}`, 10, 70);
-    ctx.fillText(`💥 Bombs exploded: ${backendStats.bombsExploded}`, 10, 90);
+    ctx.fillText(`MassiveSweeper`, SPACING.BASE, SPACING.BASE);
+    ctx.fillText(`🧹 Active sweepers: ${backendStats.activeUsers}`, SPACING.BASE, 30);
+    ctx.fillText(`🧹 Total sweepers: ${backendStats.uniqueUsersEver}`, SPACING.BASE, 50);
+    ctx.fillText(`🗺️ Revealed: ${backendStats.revealed} (${backendStats.revealedPercent.toFixed(2)}%)`, SPACING.BASE, 70);
+    ctx.fillText(`🚩 Flags planted: ${backendStats.flagged}`, SPACING.BASE, 90);
+    ctx.fillText(`💥 Mines exploded: ${backendStats.bombsExploded}`, SPACING.BASE, 110);
     if (hoverCell) {
-      ctx.fillText(`🗺️ You: (${hoverCell.x}, ${hoverCell.y})`, 10, 110);
+      ctx.fillText(`🗺️ You: (${hoverCell.x}, ${hoverCell.y})`, SPACING.BASE, 130);
     }
     
     // Draw player stats
     const { stats } = usePlayerStats.getState();
-    ctx.fillText(`Your Stats:`, 10, 140);
-    ctx.fillText(`🧹 Cells: ${stats.cellsCleared.toLocaleString()}`, 10, 160);
-    ctx.fillText(`🚩 Flags: ${stats.flagsPlaced.toLocaleString()}`, 10, 180);
+    ctx.fillText(`Your Stats:`, SPACING.BASE, 160);
+    ctx.fillText(`🧹 Cells: ${stats.cellsCleared.toLocaleString()}`, SPACING.BASE, 180);
+    ctx.fillText(`🚩 Flags: ${stats.flagsPlaced.toLocaleString()}`, SPACING.BASE, 200);
     // ctx.fillText(`User token: ${userTokenInfo.token.slice(0, 8)}...`, 10, 150);
-  }, [loadedChunks, offset, zoom, canvasSize, backendStats, hoverCell]);
+  }, [loadedChunks, offset, zoom, canvasSize, backendStats, hoverCell, pressedCell]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -535,20 +652,25 @@ export function GridCanvas() {
         ref={canvasRef}
         width={canvasSize.width}
         height={canvasSize.height}
-        style={{ display: "block", position: "absolute", top: 0, left: 0, cursor: isPanning ? "grabbing" : "grab" }}
+        style={{ display: "block", position: "absolute", top: 0, left: 0, cursor: getCursor() }}
         onClick={() => setShowRules(false)}
       />
       
       {/* Debug Panel (dev mode only) */}
       {import.meta.env.DEV && (
-        <div style={{ position: "absolute", top: 10, left: 10, zIndex: 10 }}>
+        <div style={{ 
+          position: "absolute", 
+          bottom: SPACING.BASE, 
+          left: SPACING.BASE, 
+          zIndex: Z_INDEX.DEBUG 
+        }}>
           <button
             style={{ 
               fontSize: 14, 
-              border: "2px solid #ff6b6b", 
-              background: "#ff6b6b", 
-              color: "white",
-              cursor: "pointer",
+              border: `2px solid ${COLORS.UI.WARNING}`, 
+              background: COLORS.UI.WARNING, 
+              color: COLORS.UI.TEXT.WHITE,
+              cursor: CURSORS.POINTER,
               borderRadius: 4,
               padding: "8px 12px",
               fontWeight: "bold"
@@ -558,35 +680,32 @@ export function GridCanvas() {
           >
             🐛 REVEAL ALL
           </button>
+          
+          {/* Debug Info Panel */}
+          <div style={{ 
+            marginTop: 8, 
+            padding: "8px 12px", 
+            background: COLORS.BACKGROUND.OVERLAY, 
+            borderRadius: 4,
+            fontSize: 12,
+            color: COLORS.UI.TEXT.PRIMARY,
+            border: `1px solid ${COLORS.UI.BORDER}`,
+            minWidth: "200px"
+          }}>
+            <div style={{ fontWeight: "bold", marginBottom: "4px", borderBottom: `1px solid ${COLORS.UI.BORDER}`, paddingBottom: "4px" }}>
+              🔧 Debug Info
+            </div>
+            <div>🔍 Zoom: {zoom.toFixed(2)}</div>
+            <div>📦 Buffer: {getBufferZoneSize(zoom)} chunks</div>
+            <div>📊 Chunks: {Object.keys(loadedChunks).length} loaded</div>
+            <div>👥 Active Players: {backendStats.activeUsers}</div>
+            <div>🌍 Total Players Ever: {backendStats.uniqueUsersEver?.toLocaleString() || 'N/A'}</div>
+            <div>💥 Mines Exploded: {backendStats.bombsExploded?.toLocaleString() || 'N/A'}</div>
+            <div>🚩 Flags Placed: {backendStats.flagged?.toLocaleString() || 'N/A'}</div>
+          </div>
         </div>
       )}
-      
-      <div style={{ position: "absolute", top: 10, right: 10, zIndex: 10 }}>
-        <button
-          style={{ fontSize: 24, border: "none", background: "none", cursor: "pointer" }}
-          onClick={e => { e.stopPropagation(); setShowRules(v => !v); }}
-          title="Show rules"
-        >
-          ❓
-        </button>
-      </div>
-      
-      {/* Rules Panel */}
-      {showRules && (
-        <div style={{
-          position: "absolute", top: 60, right: 10, zIndex: 20, background: "#fff", color: "#222", border: "1px solid #ccc", borderRadius: 8, padding: 20, maxWidth: 400, boxShadow: "0 2px 8px rgba(0,0,0,0.15)"
-        }}>
-          <h2>MASSIVESWEEPER Rules</h2>
-          <ul>
-            <li>Reveal all safe cells without triggering mines.</li>
-            <li>Right-click to flag suspected mines.</li>
-            <li>Work together with other players in real time!</li>
-            <li>Zoom and pan to explore the massive grid.</li>
-            <li>Stats and progress are shown in the top-left.</li>
-          </ul>
-          <button onClick={() => setShowRules(false)} style={{ marginTop: 10 }}>Close</button>
-        </div>
-      )}
+            
       
       {/* Completion Screen */}
       {showCompletion && (

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { useChunkedGridStore, Cell, Chunk } from "../hooks/useChunkedGridStore";
 import { usePlayerStats } from "../hooks/usePlayerStats";
-import { userTokenInfo } from "../network/socket";
+import { userTokenInfo, socket } from "../network/socket";
 import { 
   CHUNK_SIZE, 
   CELL_SIZE, 
@@ -45,7 +45,7 @@ export function GridCanvas() {
   const revealCell = useChunkedGridStore((state) => state.revealCell);
   const flagCell = useChunkedGridStore((state) => state.flagCell);
   const chordClick = useChunkedGridStore((state) => state.chordClick);
-  const fetchGridSize = useChunkedGridStore((state) => state.fetchGridSize);
+  const fetchGridSize = useChunkedGridStore((state) => state.fetchGridSize);  
   const gridSize = useChunkedGridStore((state) => state.gridSize);
   
   // Player stats
@@ -68,8 +68,8 @@ export function GridCanvas() {
     correctFlags: 0,
     totalMines: 0,
     activeUsers: 0,
-    uniqueUsersEver: 0, // Added for new rule
-    bombsExploded: 0, // Added for new rule
+    uniqueUsersEver: 0,
+    bombsExploded: 0,
   });
 
   // Hovered cell state
@@ -81,130 +81,36 @@ export function GridCanvas() {
   // Visual feedback state for mouse down
   const [pressedCell, setPressedCell] = useState<{ x: number; y: number } | null>(null);
   
-  // Rules panel state
-  const [showRules, setShowRules] = useState(false);
   // Completion screen state
   const [showCompletion, setShowCompletion] = useState(false);
   const [completionMinimized, setCompletionMinimized] = useState(false);
+
+  // Socket connection state
+  const [isSocketConnected, setIsSocketConnected] = useState(false);
 
   // Determine the appropriate cursor based on current state
   const getCursor = useCallback(() => {
     if (isSpaceDown) {
       if (isPanning) {
-        return CURSORS.GRABBING; // Hand grip cursor when panning
+        return CURSORS.GRABBING;
       } else {
-        return CURSORS.GRAB; // Hand cursor when space is pressed but not panning
+        return CURSORS.GRAB;
       }
     } else {
-      return CURSORS.DEFAULT; // Default cursor when not pressing space
+      return CURSORS.DEFAULT;
     }
   }, [isSpaceDown, isPanning]);
 
-  // Fetch grid size on mount
-  useEffect(() => {
-    fetchGridSize();
-  }, [fetchGridSize]);
-
-  // Check for completion on mount (in case joining after completion)
-  useEffect(() => {
-    if (gridSize && backendStats.revealed > 0 && !completionMinimized) {
-      const totalCells = gridSize.width * gridSize.height;
-      const safeCells = totalCells - backendStats.totalMines;
-      if (backendStats.revealed >= safeCells) {
-        setShowCompletion(true);
-      }
-    }
-  }, [gridSize, backendStats.revealed, backendStats.totalMines, completionMinimized]);
-
-  // Reset minimized state when game resets (revealed count drops significantly)
-  useEffect(() => {
-    if (backendStats.revealed < COMPLETION_RESET_THRESHOLD && completionMinimized) {
-      setCompletionMinimized(false);
-    }
-  }, [backendStats.revealed, completionMinimized]);
-
-  // Check if game is complete (all safe cells revealed)
+  // Consolidated completion check function
   const checkCompletion = useCallback(() => {
-    if (!gridSize) return false;
+    if (!gridSize || completionMinimized) return false;
     const totalCells = gridSize.width * gridSize.height;
     const safeCells = totalCells - backendStats.totalMines;
     return backendStats.revealed >= safeCells;
-  }, [gridSize, backendStats.revealed, backendStats.totalMines]);
+  }, [gridSize, backendStats.revealed, backendStats.totalMines, completionMinimized]);
 
-  // Debug function to reveal all cells (dev mode only)
-  const revealAllCells = useCallback(async () => {
-    if (!import.meta.env.DEV) return;
-    
-    try {
-      const response = await fetch(`${getApiBaseUrl()}${API_ENDPOINTS.REVEAL_ALL}`)
-      
-      if (response.ok) {
-        console.log("All cells revealed for debugging");
-      } else {
-        console.error("Failed to reveal all cells");
-      }
-    } catch (error) {
-      console.error("Error revealing all cells:", error);
-    }
-  }, []);
-
-  // Poll backend stats every 2 seconds
-  useEffect(() => {
-    let mounted = true;
-    async function fetchStats() {
-      try {
-        const [chunkRes, revealedRes, flaggedRes, usersRes] = await Promise.all([
-          fetch(`${getApiBaseUrl()}${API_ENDPOINTS.CHUNK_COUNT}`).then(r => r.json()),
-          fetch(`${getApiBaseUrl()}${API_ENDPOINTS.REVEALED_STATS}`).then(r => r.json()),
-          fetch(`${getApiBaseUrl()}${API_ENDPOINTS.FLAGGED_STATS}`).then(r => r.json()),
-          fetch(`${getApiBaseUrl()}${API_ENDPOINTS.ACTIVE_USERS}`).then(r => r.json()),
-        ]);
-        if (mounted) {
-          const newStats = {
-            chunkCount: chunkRes.count,
-            revealed: revealedRes.revealed,
-            revealedPercent: revealedRes.percent,
-            flagged: flaggedRes.flagged,
-            correctFlags: flaggedRes.correctFlags,
-            totalMines: flaggedRes.totalMines,
-            activeUsers: usersRes.count,
-            uniqueUsersEver: usersRes.uniqueUsersEver,
-            bombsExploded: revealedRes.bombsExploded ?? 0,
-          };
-          setBackendStats(newStats);
-          
-                     // Check for completion (only if not minimized)
-           if (gridSize && !completionMinimized) {
-             const totalCells = gridSize.width * gridSize.height;
-             const safeCells = totalCells - newStats.totalMines;
-             if (newStats.revealed >= safeCells) {
-               setShowCompletion(true);
-             }
-           }
-        }
-              } catch (e) {
-          console.error("Failed to fetch stats:", e);
-        }
-      }
-         fetchStats();
-     const interval = setInterval(fetchStats, STATS_POLL_INTERVAL);
-     return () => { mounted = false; clearInterval(interval); };
-   }, [gridSize, completionMinimized]);
-
-  // Calculate visible grid bounds and chunks
-  function getVisibleBounds() {
-    if (!gridSize) return { left: 0, top: 0, right: 0, bottom: 0 };
-    
-    // Top-left in grid coords
-    const left = Math.max(0, Math.floor((-offset.x) / (CELL_SIZE * zoom)));
-    const top = Math.max(0, Math.floor((-offset.y) / (CELL_SIZE * zoom)));
-    // Bottom-right in grid coords
-    const right = Math.min(gridSize.width, Math.ceil((canvasSize.width - offset.x) / (CELL_SIZE * zoom)));
-    const bottom = Math.min(gridSize.height, Math.ceil((canvasSize.height - offset.y) / (CELL_SIZE * zoom)));
-    return { left, top, right, bottom };
-  }
-
-  function getVisibleChunks() {
+  // Consolidated chunk calculation function
+  const calculateVisibleChunks = useCallback(() => {
     if (!gridSize) return [];
     
     const { left, top, right, bottom } = getVisibleBounds();
@@ -213,16 +119,12 @@ export function GridCanvas() {
     const chunkRight = Math.floor((right - 1) / CHUNK_SIZE);
     const chunkBottom = Math.floor((bottom - 1) / CHUNK_SIZE);
     
-    // Calculate buffer zone size based on zoom level
     const bufferSize = getBufferZoneSize(zoom);
-    
-    // Expand bounds with buffer zone for preemptive loading
     const expandedBounds = expandChunkBounds(
       { left: chunkLeft, top: chunkTop, right: chunkRight, bottom: chunkBottom },
       bufferSize
     );
     
-    // Clamp to grid bounds
     const maxChunkX = Math.floor(gridSize.width / CHUNK_SIZE) - 1;
     const maxChunkY = Math.floor(gridSize.height / CHUNK_SIZE) - 1;
     
@@ -238,61 +140,181 @@ export function GridCanvas() {
       }
     }
     return chunks;
+  }, [gridSize, zoom]);
+
+  // Consolidated mouse coordinate calculation
+  const getMouseGridCoordinates = useCallback((e: MouseEvent) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    
+    const rect = canvas.getBoundingClientRect();
+    const cx = (e.clientX - rect.left - offset.x) / zoom;
+    const cy = (e.clientY - rect.top - offset.y) / zoom;
+    const cellX = Math.floor(cx / CELL_SIZE);
+    const cellY = Math.floor(cy / CELL_SIZE);
+    
+    return { cellX, cellY, cx, cy };
+  }, [offset, zoom]);
+
+  // Initialize grid and restore chunks
+  useEffect(() => {
+    const initializeGrid = async () => {
+      try {
+        await fetchGridSize();
+      } catch (error) {
+        // Failed to initialize grid - silently handle
+      }
+    };
+    
+    initializeGrid();
+  }, [fetchGridSize]);
+
+  // Socket connection management
+  useEffect(() => {
+    const handleConnect = () => {
+      setIsSocketConnected(true);
+    };
+
+    const handleDisconnect = () => {
+      setIsSocketConnected(false);
+    };
+
+    const handleConnectError = (error: any) => {
+      setIsSocketConnected(false);
+    };
+
+    socket.on('connect', handleConnect);
+    socket.on('disconnect', handleDisconnect);
+    socket.on('connect_error', handleConnectError);
+
+    // Set initial connection state
+    setIsSocketConnected(socket.connected);
+
+    return () => {
+      socket.off('connect', handleConnect);
+      socket.off('disconnect', handleDisconnect);
+      socket.off('connect_error', handleConnectError);
+    };
+  }, []);
+
+  // Single completion check effect
+  useEffect(() => {
+    if (checkCompletion()) {
+      setShowCompletion(true);
+    }
+  }, [checkCompletion]);
+
+  // Reset minimized state when game resets
+  useEffect(() => {
+    if (backendStats.revealed < COMPLETION_RESET_THRESHOLD && completionMinimized) {
+      setCompletionMinimized(false);
+    }
+  }, [backendStats.revealed, completionMinimized]);
+
+  // Debug function to reveal all cells (dev mode only)
+  const revealAllCells = useCallback(async () => {
+    if (!import.meta.env.DEV) return;
+    
+    try {
+      const response = await fetch(`${getApiBaseUrl()}${API_ENDPOINTS.REVEAL_ALL}`);
+      
+      if (response.ok) {
+        // All cells revealed for debugging
+      } else {
+        // Failed to reveal all cells
+      }
+    } catch (error) {
+      // Error revealing all cells
+    }
+  }, []);
+
+  // Poll backend stats with error handling and connection awareness
+  useEffect(() => {
+    let mounted = true;
+    let retryCount = 0;
+    const maxRetries = 3;
+
+    async function fetchStats() {
+      if (!isSocketConnected && retryCount >= maxRetries) {
+        return;
+      }
+
+      try {
+        const [chunkRes, revealedRes, flaggedRes, usersRes] = await Promise.all([
+          fetch(`${getApiBaseUrl()}${API_ENDPOINTS.CHUNK_COUNT}`).then(r => r.json()),
+          fetch(`${getApiBaseUrl()}${API_ENDPOINTS.REVEALED_STATS}`).then(r => r.json()),
+          fetch(`${getApiBaseUrl()}${API_ENDPOINTS.FLAGGED_STATS}`).then(r => r.json()),
+          fetch(`${getApiBaseUrl()}${API_ENDPOINTS.ACTIVE_USERS}`).then(r => r.json()),
+        ]);
+
+        if (mounted) {
+          const newStats = {
+            chunkCount: chunkRes.count,
+            revealed: revealedRes.revealed,
+            revealedPercent: revealedRes.percent,
+            flagged: flaggedRes.flagged,
+            correctFlags: flaggedRes.correctFlags,
+            totalMines: flaggedRes.totalMines,
+            activeUsers: usersRes.count,
+            uniqueUsersEver: usersRes.uniqueUsersEver,
+            bombsExploded: revealedRes.bombsExploded ?? 0,
+          };
+          setBackendStats(newStats);
+          retryCount = 0; // Reset retry count on success
+        }
+      } catch (error) {
+        retryCount++;
+      }
+    }
+
+    fetchStats();
+    const interval = setInterval(fetchStats, STATS_POLL_INTERVAL);
+    
+    return () => { 
+      mounted = false; 
+      clearInterval(interval); 
+    };
+  }, [isSocketConnected]);
+
+  // Calculate visible grid bounds
+  function getVisibleBounds() {
+    if (!gridSize) return { left: 0, top: 0, right: 0, bottom: 0 };
+    
+    const left = Math.max(0, Math.floor((-offset.x) / (CELL_SIZE * zoom)));
+    const top = Math.max(0, Math.floor((-offset.y) / (CELL_SIZE * zoom)));
+    const right = Math.min(gridSize.width, Math.ceil((canvasSize.width - offset.x) / (CELL_SIZE * zoom)));
+    const bottom = Math.min(gridSize.height, Math.ceil((canvasSize.height - offset.y) / (CELL_SIZE * zoom)));
+    return { left, top, right, bottom };
   }
 
+  // Request visible chunks with logging
   const requestVisibleChunks = useCallback(() => {
     if (!gridSize) {
-      console.log("Grid size not loaded yet, skipping chunk requests");
       return;
     }
     
-    const { left, top, right, bottom } = getVisibleBounds();
-    const chunkLeft = Math.floor(left / CHUNK_SIZE);
-    const chunkTop = Math.floor(top / CHUNK_SIZE);
-    const chunkRight = Math.floor((right - 1) / CHUNK_SIZE);
-    const chunkBottom = Math.floor((bottom - 1) / CHUNK_SIZE);
-    
+    const visibleChunks = calculateVisibleChunks();
     const bufferSize = getBufferZoneSize(zoom);
-    const visibleChunks = getVisibleChunks();
-    
-    // Log buffer zone information
-    if (bufferSize > 0) {
-      console.log(`[Buffer Loading] Zoom: ${zoom.toFixed(2)}, Buffer: ${bufferSize} chunks`);
-      console.log(`[Buffer Loading] Visible: ${chunkRight - chunkLeft + 1}x${chunkBottom - chunkTop + 1}, Total: ${visibleChunks.length} chunks`);
-    }
     
     for (const { cx, cy } of visibleChunks) {
       requestChunk(cx, cy);
     }
-  }, [offset, zoom, canvasSize, gridSize, requestChunk]);
+  }, [gridSize, calculateVisibleChunks, zoom, requestChunk]);
 
   // Request visible chunks on pan/zoom
   useEffect(() => {
     requestVisibleChunks();
-    // eslint-disable-next-line
-  }, [offset, zoom, canvasSize]);
+  }, [offset, zoom, canvasSize, requestVisibleChunks]);
 
-  // Wrap revealCell to re-request visible chunks after revealing
-  const revealAndRefresh = useCallback((chunkX, chunkY, localX, localY) => {
+  // Wrap revealCell to re-request visible chunks after revealing (fix for chunk sync issue)
+  const revealAndRefresh = useCallback((chunkX: number, chunkY: number, localX: number, localY: number) => {
     revealCell(chunkX, chunkY, localX, localY);
-    
-    // Track player stats
-    const chunk = loadedChunks[`${chunkX},${chunkY}`];
-    if (chunk && chunk[localY] && chunk[localY][localX]) {
-      const cell = chunk[localY][localX];
-      if (!cell.revealed && !cell.flagged) {
-        incrementCellsCleared();
-        if (cell.hasMine) {
-          incrementBombsExploded();
-        }
-      }
-    }
     
     // Wait a tick for backend to process, then re-request visible chunks
     setTimeout(() => {
       requestVisibleChunks();
-    }, CHUNK_REFRESH_DELAY);
-  }, [revealCell, requestVisibleChunks, loadedChunks, incrementCellsCleared, incrementBombsExploded]);
+    }, 50);
+  }, [revealCell, requestVisibleChunks]);
 
   // Handle window resize
   useEffect(() => {
@@ -311,41 +333,61 @@ export function GridCanvas() {
     };
   }, [startSession, endSession]);
 
-  // Pan handlers
+  // Listen for cell updates from backend and track stats
+  useEffect(() => {
+    console.log('🔢 loadedChunks: ', loadedChunks);
+    const handleCellUpdate = ({ cx, cy, x, y, cell }: { cx: number; cy: number; x: number; y: number; cell: any }) => {
+      const chunkKey = `${cx},${cy}`;
+      const chunk = loadedChunks[chunkKey];
+      if (chunk && chunk[y] && chunk[y][x]) {
+        const previousCell = chunk[y][x];
+        
+        if (cell.revealed && !previousCell.revealed && !previousCell.flagged) {
+          incrementCellsCleared();
+          if (cell.hasMine) {
+            incrementBombsExploded();
+          }
+        }
+        
+        if (cell.flagged && !previousCell.flagged) {
+          incrementFlagsPlaced(cell.hasMine);
+        }
+      }
+    };
+
+    socket.on('cell_update', handleCellUpdate);
+    
+    return () => {
+      socket.off('cell_update', handleCellUpdate);
+    };
+  }, [loadedChunks, incrementCellsCleared, incrementBombsExploded, incrementFlagsPlaced]);
+
+  // Mouse event handlers
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const handleMouseDown = (e: MouseEvent) => {
-      // Track pressed buttons for chord click detection
       setPressedButtons(prev => new Set([...prev, e.button]));
       
       if (isSpaceDown) {
         setIsPanning(true);
         setLastMouse({ x: e.clientX, y: e.clientY });
       } else {
-        // Grid interaction - only set visual feedback, no actions yet
-        const rect = canvas.getBoundingClientRect();
-        const cx = (e.clientX - rect.left - offset.x) / zoom;
-        const cy = (e.clientY - rect.top - offset.y) / zoom;
-        const cellX = Math.floor(cx / CELL_SIZE);
-        const cellY = Math.floor(cy / CELL_SIZE);
-        
-        if (cellX >= 0 && cellY >= 0) {
-          // Set visual feedback for the pressed cell
-          setPressedCell({ x: cellX, y: cellY });
+        const coords = getMouseGridCoordinates(e);
+        if (coords && coords.cellX >= 0 && coords.cellY >= 0) {
+          setPressedCell({ x: coords.cellX, y: coords.cellY });
         }
       }
     };
+
     const handleMouseUp = (e: MouseEvent) => {
-      // Clear the released button from pressed buttons
       setPressedButtons(prev => {
         const newSet = new Set(prev);
         newSet.delete(e.button);
         return newSet;
       });
       
-      // Clear visual feedback
       setPressedCell(null);
       
       if (isPanning) {
@@ -354,93 +396,82 @@ export function GridCanvas() {
         return;
       }
       
-      // Perform grid actions on mouse up
       if (pressedCell) {
-        const rect = canvas.getBoundingClientRect();
-        const cx = (e.clientX - rect.left - offset.x) / zoom;
-        const cy = (e.clientY - rect.top - offset.y) / zoom;
-        const cellX = Math.floor(cx / CELL_SIZE);
-        const cellY = Math.floor(cy / CELL_SIZE);
-        
-        // Only perform action if mouse is still over the same cell
-        if (cellX === pressedCell.x && cellY === pressedCell.y) {
-          const chunkX = worldToChunk(cellX);
-          const chunkY = worldToChunk(cellY);
-          const localX = worldToLocal(cellX);
-          const localY = worldToLocal(cellY);
+        const coords = getMouseGridCoordinates(e);
+        if (coords && coords.cellX === pressedCell.x && coords.cellY === pressedCell.y) {
+          const chunkX = worldToChunk(coords.cellX);
+          const chunkY = worldToChunk(coords.cellY);
+          const localX = worldToLocal(coords.cellX);
+          const localY = worldToLocal(coords.cellY);
           
-          // Check for chord click (simultaneous left and right mouse buttons)
           const currentPressedButtons = new Set([...pressedButtons, e.button]);
           if (currentPressedButtons.has(0) && currentPressedButtons.has(2)) {
-            // Chord click detected - both left and right buttons are pressed
             chordClick(chunkX, chunkY, localX, localY);
+            // Also re-request chunks after chord click
+            setTimeout(() => {
+              requestVisibleChunks();
+            }, 50);
           } else {
-            // Single button click
             if (e.button === 0) {
               revealAndRefresh(chunkX, chunkY, localX, localY);
             } else if (e.button === 2) {
               flagCell(chunkX, chunkY, localX, localY);
-              
-              // Track flag placement
-              const chunk = loadedChunks[`${chunkX},${chunkY}`];
-              if (chunk && chunk[localY] && chunk[localY][localX]) {
-                const cell = chunk[localY][localX];
-                if (!cell.flagged) {
-                  incrementFlagsPlaced(cell.hasMine);
-                }
-              }
             }
           }
         }
       }
     };
+
     const handleMouseMove = (e: MouseEvent) => {
       if (!isPanning || !lastMouse) {
-        const rect = canvas.getBoundingClientRect();
-        const cx = (e.clientX - rect.left - offset.x) / zoom;
-        const cy = (e.clientY - rect.top - offset.y) / zoom;
-        const cellX = Math.floor(cx / CELL_SIZE);
-        const cellY = Math.floor(cy / CELL_SIZE);
-        if (gridSize && isWithinGridBounds(cellX, cellY, gridSize.width, gridSize.height)) {
-          setHoverCell({ x: cellX, y: cellY });
+        const coords = getMouseGridCoordinates(e);
+        if (coords && gridSize && isWithinGridBounds(coords.cellX, coords.cellY, gridSize.width, gridSize.height)) {
+          setHoverCell({ x: coords.cellX, y: coords.cellY });
         } else {
           setHoverCell(null);
         }
       }
-      if (!isPanning || !lastMouse) return;
-      const dx = e.clientX - lastMouse.x;
-      const dy = e.clientY - lastMouse.y;
-      setOffset((prev) => ({ x: prev.x + dx, y: prev.y + dy }));
-      setLastMouse({ x: e.clientX, y: e.clientY });
+      
+      if (isPanning && lastMouse) {
+        const dx = e.clientX - lastMouse.x;
+        const dy = e.clientY - lastMouse.y;
+        setOffset((prev) => ({ x: prev.x + dx, y: prev.y + dy }));
+        setLastMouse({ x: e.clientX, y: e.clientY });
+      }
     };
+
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
       const rect = canvas.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
-      // World coordinates before zoom
       const worldX = (mouseX - offset.x) / zoom;
       const worldY = (mouseY - offset.y) / zoom;
-      // Calculate minZoom so that at most 4x4 chunks (400x400 cells) are visible
+      
       const minZoomX = canvasSize.width / (CHUNK_SIZE * MIN_VISIBLE_CHUNKS * CELL_SIZE);
       const minZoomY = canvasSize.height / (CHUNK_SIZE * MIN_VISIBLE_CHUNKS * CELL_SIZE);
       const minZoom = Math.max(minZoomX, minZoomY, ZOOM_LIMITS.MIN);
+      
       let newZoom = zoom - e.deltaY * ZOOM_INTENSITY * 0.01;
-      newZoom = clampZoom(newZoom); // Clamp zoom
-      // Adjust offset so the world point under the mouse stays under the mouse
+      newZoom = clampZoom(newZoom);
+      
       const newOffsetX = mouseX - worldX * newZoom;
       const newOffsetY = mouseY - worldY * newZoom;
+      
       setZoom(newZoom);
       setOffset({ x: newOffsetX, y: newOffsetY });
     };
+
     const handleContextMenu = (e: MouseEvent) => {
       e.preventDefault();
     };
+
     canvas.addEventListener("mousedown", handleMouseDown);
     window.addEventListener("mouseup", handleMouseUp);
     window.addEventListener("mousemove", handleMouseMove);
     canvas.addEventListener("wheel", handleWheel, { passive: false });
     canvas.addEventListener("contextmenu", handleContextMenu);
+    
     return () => {
       canvas.removeEventListener("mousedown", handleMouseDown);
       window.removeEventListener("mouseup", handleMouseUp);
@@ -448,54 +479,55 @@ export function GridCanvas() {
       canvas.removeEventListener("wheel", handleWheel);
       canvas.removeEventListener("contextmenu", handleContextMenu);
     };
-  }, [isPanning, lastMouse, zoom, isSpaceDown, offset, canvasSize, pressedButtons, chordClick, pressedCell]);
+  }, [isPanning, lastMouse, zoom, isSpaceDown, offset, canvasSize, pressedButtons, chordClick, pressedCell, getMouseGridCoordinates, gridSize, revealAndRefresh, flagCell]);
 
-  useEffect(() => {
+  // Canvas rendering
+  useEffect(() => {    
     const canvas = canvasRef.current;
     if (!canvas) return;
+    
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = COLORS.BACKGROUND.PRIMARY; // light gray background
+    ctx.fillStyle = COLORS.BACKGROUND.PRIMARY;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.setTransform(zoom, 0, 0, zoom, offset.x, offset.y);
-    // Only render visible cells in loaded chunks
+    
     const { left, top, right, bottom } = getVisibleBounds();
-    // Dynamic cell skipping for performance
     const cellStep = getCellRenderStep(zoom);
+    
     for (let y = top; y < bottom; y += cellStep) {
       for (let x = left; x < right; x += cellStep) {
-        const chunkSize = 100; // Should match the chunk size from the store
+        const chunkSize = 100;
         const chunkX = Math.floor(x / chunkSize);
         const chunkY = Math.floor(y / chunkSize);
         const localX = ((x % chunkSize) + chunkSize) % chunkSize;
         const localY = ((y % chunkSize) + chunkSize) % chunkSize;
-        const chunk = loadedChunks[`${chunkX},${chunkY}`];
+        const chunkKey = `${chunkX},${chunkY}`;
+        const chunk = loadedChunks[chunkKey];
+              
+        
         if (!chunk || !chunk[localY] || !chunk[localY][localX]) continue;
         const cell = chunk[localY][localX];
-        
-        // Check if this cell is being pressed for visual feedback
         const isPressed = pressedCell && pressedCell.x === x && pressedCell.y === y;
         
-        // Cell background
         if (cell.revealed) {
           ctx.fillStyle = cell.hasMine ? COLORS.CELL.MINE : COLORS.CELL.REVEALED;
         } else {
           ctx.fillStyle = COLORS.CELL.UNREVEALED;
         }
         
-        // Add pressed visual feedback (brighter color)
         if (isPressed) {
-          ctx.fillStyle = COLORS.CELL.PRESSED; // Use brighter version of unrevealed color
+          ctx.fillStyle = COLORS.CELL.PRESSED;
         }
+        
         ctx.fillRect(x * CELL_SIZE, y * CELL_SIZE, (CELL_SIZE - 1) * cellStep, (CELL_SIZE - 1) * cellStep);
-        // Border
         ctx.strokeStyle = COLORS.CELL.BORDER;
         ctx.lineWidth = 1;
         ctx.strokeRect(x * CELL_SIZE, y * CELL_SIZE, (CELL_SIZE - 1) * cellStep, (CELL_SIZE - 1) * cellStep);
-        // Only draw details if not skipping many cells
+        
         if (cellStep === 1) {
-          // Flag
           if (cell.flagged && !cell.revealed) {
             ctx.fillStyle = COLORS.GAME.FLAG;
             ctx.beginPath();
@@ -505,14 +537,14 @@ export function GridCanvas() {
             ctx.closePath();
             ctx.fill();
           }
-          // Mine
+          
           if (cell.revealed && cell.hasMine) {
             ctx.fillStyle = COLORS.GAME.MINE;
             ctx.beginPath();
             ctx.arc(x * CELL_SIZE + 4.5, y * CELL_SIZE + 4.5, 3, 0, 2 * Math.PI);
             ctx.fill();
           }
-          // Adjacent mines
+          
           if (cell.revealed && !cell.hasMine && cell.adjacentMines > 0) {
             ctx.fillStyle = getNumberColor(cell.adjacentMines);
             ctx.font = `${FONTS.SIZE.TINY} ${FONTS.FAMILY.PRIMARY}`;
@@ -527,14 +559,14 @@ export function GridCanvas() {
         }
       }
     }
-    // Draw ruler lines every 100 cells
+    
+    // Draw ruler lines
     if (gridSize) {
       ctx.save();
       ctx.setTransform(zoom, 0, 0, zoom, offset.x, offset.y);
-      ctx.strokeStyle = COLORS.GRID.RULER_LINE; // Blue with transparency
+      ctx.strokeStyle = COLORS.GRID.RULER_LINE;
       ctx.lineWidth = 2;
       
-      // Vertical lines (every 100 cells)
       for (let x = RULER_INTERVAL; x < gridSize.width; x += RULER_INTERVAL) {
         const worldX = x * CELL_SIZE;
         ctx.beginPath();
@@ -543,7 +575,6 @@ export function GridCanvas() {
         ctx.stroke();
       }
       
-      // Horizontal lines (every 100 cells)
       for (let y = RULER_INTERVAL; y < gridSize.height; y += RULER_INTERVAL) {
         const worldY = y * CELL_SIZE;
         ctx.beginPath();
@@ -552,47 +583,38 @@ export function GridCanvas() {
         ctx.stroke();
       }
       
-             ctx.restore();
-     }
-     
-     // Draw ruler labels fixed to screen edges (after the grid transform)
-     if (gridSize) {
-       ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset to screen coordinates
-       
-       // Calculate font size based on zoom (inverse relationship)
-       const fontSize = getResponsiveFontSize(16, zoom);
-       
-       ctx.fillStyle = COLORS.GRID.RULER_LABEL;
-       ctx.font = `${fontSize}px ${FONTS.FAMILY.MONOSPACE}`;
-       ctx.textAlign = "center";
-       ctx.textBaseline = "middle";
-       
-       // Vertical labels (top edge of screen)
-       for (let x = RULER_INTERVAL; x < gridSize.width; x += RULER_INTERVAL) {
-         const worldX = x * CELL_SIZE;
-         const screenX = worldX * zoom + offset.x;
-         
-         // Only draw if the line is visible on screen
-         if (screenX >= -50 && screenX <= canvasSize.width + 50) {
-           ctx.fillText(x.toString(), screenX, 25);
-         }
-       }
-       
-       // Horizontal labels (left edge of screen)
-       for (let y = RULER_INTERVAL; y < gridSize.height; y += RULER_INTERVAL) {
-         const worldY = y * CELL_SIZE;
-         const screenY = worldY * zoom + offset.y;
-         
-         // Only draw if the line is visible on screen
-         if (screenY >= -50 && screenY <= canvasSize.height + 50) {
-           ctx.fillText(y.toString(), 25, screenY);
-         }
-       }
+      ctx.restore();
+    }
+    
+    // Draw ruler labels
+    if (gridSize) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      const fontSize = getResponsiveFontSize(16, zoom);
+      ctx.fillStyle = COLORS.GRID.RULER_LABEL;
+      ctx.font = `${fontSize}px ${FONTS.FAMILY.MONOSPACE}`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      
+      for (let x = RULER_INTERVAL; x < gridSize.width; x += RULER_INTERVAL) {
+        const worldX = x * CELL_SIZE;
+        const screenX = worldX * zoom + offset.x;
+        if (screenX >= -50 && screenX <= canvasSize.width + 50) {
+          ctx.fillText(x.toString(), screenX, 25);
+        }
+      }
+      
+      for (let y = RULER_INTERVAL; y < gridSize.height; y += RULER_INTERVAL) {
+        const worldY = y * CELL_SIZE;
+        const screenY = worldY * zoom + offset.y;
+        if (screenY >= -50 && screenY <= canvasSize.height + 50) {
+          ctx.fillText(y.toString(), 25, screenY);
+        }
+      }
       
       ctx.restore();
     }
     
-    // Draw MASSIVESWEEPER in the center of the grid (world coordinates)
+    // Draw MASSIVESWEEPER in center
     const gridCenterX = gridSize ? (gridSize.width * CELL_SIZE) / 2 : DEFAULT_GRID_CENTER.X;
     const gridCenterY = gridSize ? (gridSize.height * CELL_SIZE) / 2 : DEFAULT_GRID_CENTER.Y;
     ctx.save();
@@ -603,9 +625,9 @@ export function GridCanvas() {
     ctx.textBaseline = "middle";
     ctx.fillText("MASSIVESWEEPER", gridCenterX, gridCenterY);
     ctx.restore();
-    // Draw counters in top left
+    
+    // Draw UI overlay
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    // Draw background for UI
     ctx.fillStyle = COLORS.BACKGROUND.OVERLAY;
     ctx.fillRect(SPACING.SMALL, SPACING.SMALL, DIMENSIONS.OVERLAY.WIDTH, DIMENSIONS.OVERLAY.HEIGHT);
     ctx.fillStyle = COLORS.UI.TEXT.PRIMARY;
@@ -618,18 +640,23 @@ export function GridCanvas() {
     ctx.fillText(`🗺️ Revealed: ${backendStats.revealed} (${backendStats.revealedPercent.toFixed(2)}%)`, SPACING.BASE, 70);
     ctx.fillText(`🚩 Flags planted: ${backendStats.flagged}`, SPACING.BASE, 90);
     ctx.fillText(`💥 Mines exploded: ${backendStats.bombsExploded}`, SPACING.BASE, 110);
+    
     if (hoverCell) {
       ctx.fillText(`🗺️ You: (${hoverCell.x}, ${hoverCell.y})`, SPACING.BASE, 130);
     }
     
+    // Connection status indicator
+    ctx.fillStyle = isSocketConnected ? COLORS.UI.SUCCESS : COLORS.UI.ERROR;
+    ctx.fillText(`🔌 ${isSocketConnected ? 'Connected' : 'Disconnected'}`, SPACING.BASE, 150);
+    
     // Draw player stats
     const { stats } = usePlayerStats.getState();
-    ctx.fillText(`Your Stats:`, SPACING.BASE, 160);
-    ctx.fillText(`🧹 Cells: ${stats.cellsCleared.toLocaleString()}`, SPACING.BASE, 180);
-    ctx.fillText(`🚩 Flags: ${stats.flagsPlaced.toLocaleString()}`, SPACING.BASE, 200);
-    // ctx.fillText(`User token: ${userTokenInfo.token.slice(0, 8)}...`, 10, 150);
-  }, [loadedChunks, offset, zoom, canvasSize, backendStats, hoverCell, pressedCell]);
+    ctx.fillText(`Your Stats:`, SPACING.BASE, 180);
+    ctx.fillText(`🧹 Cells: ${stats.cellsCleared.toLocaleString()}`, SPACING.BASE, 200);
+    ctx.fillText(`🚩 Flags: ${stats.flagsPlaced.toLocaleString()}`, SPACING.BASE, 220);
+  }, [loadedChunks, offset, zoom, canvasSize, backendStats, hoverCell, pressedCell, gridSize, isSocketConnected]);
 
+  // Keyboard event handlers
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === "Space") setIsSpaceDown(true);
@@ -645,7 +672,6 @@ export function GridCanvas() {
     };
   }, []);
 
-  // Add question mark icon and rules panel
   return (
     <>
       <canvas
@@ -653,7 +679,6 @@ export function GridCanvas() {
         width={canvasSize.width}
         height={canvasSize.height}
         style={{ display: "block", position: "absolute", top: 0, left: 0, cursor: getCursor() }}
-        onClick={() => setShowRules(false)}
       />
       
       {/* Debug Panel (dev mode only) */}
@@ -698,6 +723,7 @@ export function GridCanvas() {
             <div>🔍 Zoom: {zoom.toFixed(2)}</div>
             <div>📦 Buffer: {getBufferZoneSize(zoom)} chunks</div>
             <div>📊 Chunks: {Object.keys(loadedChunks).length} loaded</div>
+            <div>🔌 Socket: {isSocketConnected ? 'Connected' : 'Disconnected'}</div>
             <div>👥 Active Players: {backendStats.activeUsers}</div>
             <div>🌍 Total Players Ever: {backendStats.uniqueUsersEver?.toLocaleString() || 'N/A'}</div>
             <div>💥 Mines Exploded: {backendStats.bombsExploded?.toLocaleString() || 'N/A'}</div>
@@ -705,7 +731,6 @@ export function GridCanvas() {
           </div>
         </div>
       )}
-            
       
       {/* Completion Screen */}
       {showCompletion && (

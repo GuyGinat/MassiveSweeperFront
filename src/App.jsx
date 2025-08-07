@@ -3,6 +3,7 @@ import { useGridStore } from "./hooks/useGridStore";
 import { useState, useEffect } from "react";
 import TutorialModal from "./components/TutorialModal";
 import HelpButton from "./components/HelpButton";
+import StatsDebug from "./components/StatsDebug";
 
 function App() {
   const revealCell = useGridStore((s) => s.revealCell);
@@ -10,11 +11,8 @@ function App() {
   const [showHelpModal, setShowHelpModal] = useState(false);
 
   useEffect(() => {
-    // Check if user has seen the welcome modal before
-    const hasSeenWelcome = localStorage.getItem('massivesweeper-welcome-seen');
-    if (hasSeenWelcome !== 'true' || import.meta.env.DEV) {
-      setShowWelcomeModal(true);
-    }
+    // Always show welcome modal on first load
+    setShowWelcomeModal(true);
   }, []);
 
   const handleCloseWelcomeModal = () => {
@@ -43,6 +41,7 @@ function App() {
         onClose={handleCloseHelpModal}
         mode="help"
       />
+      <StatsDebug />
       {/* <div style={{ position: "absolute", top: 10, left: 10 }}>
         <button onClick={() => revealCell(1, 0)}>Reveal (1,0)</button>
       </div> */}

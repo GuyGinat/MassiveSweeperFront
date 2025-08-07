@@ -222,6 +222,32 @@ This document serves as the product backlog for MassiveSweeper, tracking all pla
   - [x] Add game statistics (mines exploded, flags placed)
   - [x] Improve debug panel styling and organization
 
+- [x] **3.3.5** Player stats persistence bug fix
+  - [x] Move stats tracking to cell_update event listeners (correct approach)
+  - [x] Add debugging and logging to player stats store
+  - [x] Create StatsDebug component for development monitoring
+  - [x] Ensure localStorage persistence works correctly
+  - [x] Fix stats tracking to use backend cell state updates instead of frontend predictions
+
+- [x] **3.3.6** Grid state persistence bug fix
+  - [x] Keep backend as single source of truth for grid state
+  - [x] Store only chunk keys (not data) in localStorage
+  - [x] Re-request chunks from backend on page refresh
+  - [x] Ensure grid progress survives page refreshes
+  - [x] Maintain revealed cells and flags across sessions via backend state
+
+- [x] **3.3.7** GridCanvas optimization and bug fixes
+  - [x] Remove redundant completion check logic
+  - [x] Consolidate chunk calculation functions
+  - [x] Fix mouse coordinate calculation duplication
+  - [x] Add socket connection state management
+  - [x] Improve error handling for stats polling
+  - [x] Add connection status indicator in UI
+  - [x] Remove unnecessary chunk re-requesting after cell actions
+  - [x] Add proper logging with component prefixes
+  - [x] Fix race conditions in initialization
+  - [x] Add retry logic for failed API calls
+
 ---
 
 ## 👥 **EPIC 4: Multiplayer Features**
@@ -385,6 +411,10 @@ This document serves as the product backlog for MassiveSweeper, tracking all pla
 - ✅ Sprint 3.1: Chord Click Feature
 - ✅ Sprint 3.2: Preemptive Chunk Loading
 - ✅ Sprint 3.3: Help System
+- ✅ Sprint 3.3.4: Debug Panel Improvements
+- ✅ Sprint 3.3.5: Player Stats Persistence Bug Fix
+- ✅ Sprint 3.3.6: Grid State Persistence Bug Fix
+- ✅ Sprint 3.3.7: GridCanvas Optimization & Bug Fixes
 
 ### **Current Sprint:**
 - None (Ready for next feature)
@@ -393,9 +423,9 @@ This document serves as the product backlog for MassiveSweeper, tracking all pla
 - Sprint 4.1: Chat System (Multiplayer Features)
 
 ### **Velocity Metrics:**
-- **Story Points Completed:** 22
-- **Bugs Fixed:** 1
-- **Features Delivered:** 6
+- **Story Points Completed:** 39
+- **Bugs Fixed:** 6
+- **Features Delivered:** 8
 
 ---
 

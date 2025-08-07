@@ -52,6 +52,7 @@ export const COLORS = {
     SHADOW: 'rgba(0,0,0,0.15)', // Subtle shadow
     SUCCESS: '#4CAF50',      // Green for success states
     WARNING: '#ff6b6b',      // Red for warnings/debug
+    ERROR: '#f44336',        // Red for errors
     INFO: '#007bff',         // Blue for info/links
   },
 

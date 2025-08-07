@@ -16,14 +16,12 @@ const TutorialModal: React.FC<TutorialModalProps> = ({ isOpen, onClose, mode }) 
     fetch(`${getApiBaseUrl()}${API_ENDPOINTS.GRID_SIZE}`)
       .then(res => res.json())
       .then(data => setGridSize(data))
-      .catch(err => console.error('Error fetching grid size:', err));
+      .catch(err => {
+        // Error fetching grid size - silently handle
+      });
   }, []);
 
   const handleClose = () => {
-    if (mode === 'welcome') {
-      // For welcome mode, mark as seen in localStorage
-      localStorage.setItem('massivesweeper-welcome-seen', 'true');
-    }
     onClose();
   };
 

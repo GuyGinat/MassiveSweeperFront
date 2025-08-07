@@ -1,7 +1,5 @@
 import { create } from "zustand";
 import { socket } from "../network/socket";
-import { CHUNK_SIZE } from "../constants/game";
-import { createChunkKey, getApiBaseUrl, API_ENDPOINTS, ERROR_MESSAGES } from "../constants/socket";
 
 export interface Cell {
   x: number;
@@ -24,15 +22,17 @@ interface ChunkedGridState {
   updateCell: (cx: number, cy: number, x: number, y: number, cell: Cell) => void;
   revealCell: (cx: number, cy: number, x: number, y: number) => void;
   flagCell: (cx: number, cy: number, x: number, y: number) => void;
-  chordClick: (cx: number, cy: number, x: number, y: number) => void;
   clearRequestedChunk: (cx: number, cy: number) => void; // Remove from requested set (for error handling)
   setGridSize: (width: number, height: number) => void;
   fetchGridSize: () => Promise<void>;
-  restoreLoadedChunks: () => void; // Restore previously loaded chunks on page refresh
+}
+
+function getChunkKey(cx: number, cy: number) {
+  return `${cx},${cy}`;
 }
 
 // Default chunk size (should match server)
-const DEFAULT_CHUNK_SIZE = CHUNK_SIZE;
+const DEFAULT_CHUNK_SIZE = 100;
 
 export const useChunkedGridStore = create<ChunkedGridState>((set, get) => ({
   loadedChunks: {},
@@ -43,6 +43,7 @@ export const useChunkedGridStore = create<ChunkedGridState>((set, get) => ({
   requestChunk: (cx, cy) => {
     const state = get();
     if (!state.gridSize) {
+      console.warn("Grid size not loaded yet, cannot request chunk");
       return;
     }
     
@@ -53,7 +54,7 @@ export const useChunkedGridStore = create<ChunkedGridState>((set, get) => ({
     // Clamp chunk coordinates to grid bounds
     const clampedCx = Math.max(0, Math.min(cx, maxChunkX));
     const clampedCy = Math.max(0, Math.min(cy, maxChunkY));
-    const key = createChunkKey(clampedCx, clampedCy);
+    const key = getChunkKey(clampedCx, clampedCy);
     
     // Only request if not already loaded and not already being requested
     if (!state.loadedChunks[key] && !state.requestedChunks.has(key)) {
@@ -65,29 +66,24 @@ export const useChunkedGridStore = create<ChunkedGridState>((set, get) => ({
   },
 
   setChunk: (cx, cy, chunk) => {
-    const key = createChunkKey(cx, cy);
-    set((state) => {
-      const newLoadedChunks = { ...state.loadedChunks, [key]: chunk };
-      
-      return {
-        loadedChunks: newLoadedChunks,
-        requestedChunks: new Set([...state.requestedChunks].filter(k => k !== key)) // Remove from requested set
-      };
-    });
+    console.log(`[frontend] Received chunk (${cx},${cy}) with ${chunk.flat().filter(c => c.revealed).length} revealed cells`);
+    const key = getChunkKey(cx, cy);
+    set((state) => ({
+      loadedChunks: { ...state.loadedChunks, [key]: chunk },
+      requestedChunks: new Set([...state.requestedChunks].filter(k => k !== key)) // Remove from requested set
+    }));
   },
 
   updateCell: (cx, cy, x, y, cell) => {
     set((state) => {
-      const key = createChunkKey(cx, cy);
+      const key = getChunkKey(cx, cy);
       const chunk = state.loadedChunks[key];
       if (!chunk) return {};
       const newChunk = chunk.map((row, rowIdx) =>
         rowIdx === y ? row.map((c, colIdx) => (colIdx === x ? cell : c)) : row
       );
-      const newLoadedChunks = { ...state.loadedChunks, [key]: newChunk };
-      
       return {
-        loadedChunks: newLoadedChunks,
+        loadedChunks: { ...state.loadedChunks, [key]: newChunk },
       };
     });
   },
@@ -100,12 +96,8 @@ export const useChunkedGridStore = create<ChunkedGridState>((set, get) => ({
     socket.emit("flag_cell", { cx, cy, x, y });
   },
 
-  chordClick: (cx, cy, x, y) => {
-    socket.emit("chord_click", { cx, cy, x, y });
-  },
-
   clearRequestedChunk: (cx, cy) => {
-    const key = createChunkKey(cx, cy);
+    const key = getChunkKey(cx, cy);
     set((state) => ({
       requestedChunks: new Set([...state.requestedChunks].filter(k => k !== key))
     }));
@@ -117,25 +109,23 @@ export const useChunkedGridStore = create<ChunkedGridState>((set, get) => ({
 
   fetchGridSize: async () => {
     try {
-      const response = await fetch(`${getApiBaseUrl()}${API_ENDPOINTS.GRID_SIZE}`);
+      const baseUrl = import.meta.env.DEV 
+        ? "http://localhost:3001" 
+        : "https://massivesweeperback.onrender.com";
+      
+      const response = await fetch(`${baseUrl}/grid-size`);
       const data = await response.json();
       
       set({ gridSize: { width: data.width, height: data.height } });
+      console.log(`[frontend] Grid size loaded: ${data.width}x${data.height}`);
     } catch (error) {
-      // Grid size fetch failed
+      console.error("Failed to fetch grid size:", error);
     }
-  },
-
-  restoreLoadedChunks: () => {
-    // No longer restoring chunks from localStorage - backend is source of truth
   },
 }));
 
 // Socket event handlers
 socket.on("chunk_data", ({ cx, cy, chunk }) => {
-  if (cx === 0 && cy === 0) {
-    console.log('🔢 Received chunk: ', chunk);
-  }
   useChunkedGridStore.getState().setChunk(cx, cy, chunk);
 });
 
@@ -145,6 +135,7 @@ socket.on("cell_update", ({ cx, cy, x, y, cell }) => {
 
 // Error handling - clear requested chunks on connection errors
 socket.on("connect_error", () => {
+  console.warn("Socket connection error - clearing requested chunks");
   const store = useChunkedGridStore.getState();
   // Clear all requested chunks on connection error
   store.requestedChunks.forEach((key) => {

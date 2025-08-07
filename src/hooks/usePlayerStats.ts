@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
 
 export interface PlayerStats {
   cellsCleared: number;
@@ -41,23 +40,23 @@ const defaultStats: PlayerStats = {
 };
 
 export const usePlayerStats = create<PlayerStatsState>()(
-  persist(
-    (set, get) => ({
+  (set, get) => ({
       stats: defaultStats,
 
       incrementCellsCleared: () => {
-        set((state) => ({
-          stats: {
+        set((state) => {
+          const newStats = {
             ...state.stats,
             cellsCleared: state.stats.cellsCleared + 1,
             lastPlayDate: new Date().toISOString(),
-          },
-        }));
+          };
+          return { stats: newStats };
+        });
       },
 
       incrementFlagsPlaced: (wasCorrect: boolean) => {
-        set((state) => ({
-          stats: {
+        set((state) => {
+          const newStats = {
             ...state.stats,
             flagsPlaced: state.stats.flagsPlaced + 1,
             correctFlags: wasCorrect 
@@ -67,29 +66,32 @@ export const usePlayerStats = create<PlayerStatsState>()(
               ? state.stats.incorrectFlags + 1 
               : state.stats.incorrectFlags,
             lastPlayDate: new Date().toISOString(),
-          },
-        }));
+          };
+          return { stats: newStats };
+        });
       },
 
       incrementBombsExploded: () => {
-        set((state) => ({
-          stats: {
+        set((state) => {
+          const newStats = {
             ...state.stats,
             bombsExploded: state.stats.bombsExploded + 1,
             lastPlayDate: new Date().toISOString(),
-          },
-        }));
+          };
+          return { stats: newStats };
+        });
       },
 
       startSession: () => {
-        set((state) => ({
-          stats: {
+        set((state) => {
+          const newStats = {
             ...state.stats,
             sessionsPlayed: state.stats.sessionsPlayed + 1,
             currentSessionStart: Date.now(),
             firstPlayDate: state.stats.firstPlayDate || new Date().toISOString(),
-          },
-        }));
+          };
+          return { stats: newStats };
+        });
       },
 
       endSession: () => {
@@ -98,13 +100,12 @@ export const usePlayerStats = create<PlayerStatsState>()(
             ? Math.floor((Date.now() - state.stats.currentSessionStart) / 1000)
             : 0;
           
-          return {
-            stats: {
-              ...state.stats,
-              totalPlayTime: state.stats.totalPlayTime + sessionDuration,
-              currentSessionStart: 0,
-            },
+          const newStats = {
+            ...state.stats,
+            totalPlayTime: state.stats.totalPlayTime + sessionDuration,
+            currentSessionStart: 0,
           };
+          return { stats: newStats };
         });
       },
 
@@ -129,10 +130,5 @@ export const usePlayerStats = create<PlayerStatsState>()(
           totalSessions: stats.sessionsPlayed,
         };
       },
-    }),
-    {
-      name: 'massivesweeper-player-stats',
-      version: 1,
-    }
-  )
-); 
+    })
+  ); 

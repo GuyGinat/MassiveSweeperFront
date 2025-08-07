@@ -175,7 +175,7 @@ export const DIMENSIONS = {
   // UI overlay dimensions
   OVERLAY: {
     WIDTH: 260,
-    HEIGHT: 220,
+    HEIGHT: 210,
     PADDING: 5,
   },
 } as const;

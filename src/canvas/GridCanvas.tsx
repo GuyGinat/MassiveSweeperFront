@@ -646,14 +646,14 @@ export function GridCanvas() {
     }
     
     // Connection status indicator
-    ctx.fillStyle = isSocketConnected ? COLORS.UI.SUCCESS : COLORS.UI.ERROR;
-    ctx.fillText(`🔌 ${isSocketConnected ? 'Connected' : 'Disconnected'}`, SPACING.BASE, 150);
+    // ctx.fillStyle = isSocketConnected ? COLORS.UI.SUCCESS : COLORS.UI.ERROR;
+    // ctx.fillText(`🔌 ${isSocketConnected ? 'Connected' : 'Disconnected'}`, SPACING.BASE, 150);
     
     // Draw player stats
     const { stats } = usePlayerStats.getState();
-    ctx.fillText(`Your Stats:`, SPACING.BASE, 180);
-    ctx.fillText(`🧹 Cells: ${stats.cellsCleared.toLocaleString()}`, SPACING.BASE, 200);
-    ctx.fillText(`🚩 Flags: ${stats.flagsPlaced.toLocaleString()}`, SPACING.BASE, 220);
+    ctx.fillText(`Your Stats:`, SPACING.BASE, 150);
+    ctx.fillText(`🧹 Cells: ${stats.cellsCleared.toLocaleString()}`, SPACING.BASE, 170);
+    ctx.fillText(`🚩 Flags: ${stats.flagsPlaced.toLocaleString()}`, SPACING.BASE, 190);
   }, [loadedChunks, offset, zoom, canvasSize, backendStats, hoverCell, pressedCell, gridSize, isSocketConnected]);
 
   // Keyboard event handlers
